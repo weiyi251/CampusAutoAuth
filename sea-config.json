@@ -1,0 +1,10 @@
+{
+  "main": "app/server.js",
+  "output": "dist/sea-prep.blob",
+  "disableExperimentalSEAWarning": true,
+  "assets": {
+    "index.html": "app/index.html",
+    "connect_xcu.ps1": "connect_xcu.ps1",
+    "enabled.cfg": "enabled.cfg"
+  }
+}

@@ -2,6 +2,17 @@
 
 XCU 校园网「连 Wi-Fi + 网页认证」全自动工具，带本地 GUI 控制面板。
 
+## 快速开始（exe 免安装版，推荐）
+
+1. 从 [Releases](https://github.com/weiyi251/CampusAutoAuth/releases) 下载 `CampusAutoAuth.exe`（Windows 10+，无需安装 Node）；
+2. 双击运行：自动弹出控制面板窗口（控制台窗口会自动隐藏）；
+   首次运行如遇 SmartScreen 提示，点「更多信息 → 仍要运行」；
+3. 在「配置」页填入学号、密码，点「立即连接校园网」即可。
+
+exe 版的数据位置：凭据与开关保存在 `%LOCALAPPDATA%\CampusAutoAuth\`（`creds.json`、`enabled.cfg`），exe 本体可放任意目录。
+
+## 源码版安装
+
 ## 目录结构
 
 | 路径 | 作用 |

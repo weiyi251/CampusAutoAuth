@@ -9,6 +9,8 @@ archive/portal_probe.html
 node_modules/
 .DS_Store
 Thumbs.db
+# SEA 打包产物
+dist/
 
 # 内部交接文档与 AI 会话数据（不发布）
 HANDOFF.md

@@ -1,15 +1,28 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
+
+// SEA（Single Executable Application）单文件模式：
+// exe 由 node + postject 注入生成，index.html / connect_xcu.ps1 / enabled.cfg 作为资产内嵌；
+// 运行时脚本资产解到临时目录，凭据与开关保存在 %LOCALAPPDATA%\CampusAutoAuth\。
+// 非 SEA（源码运行）时所有行为与原来完全一致。
+const sea = (function () { try { return require('node:sea'); } catch (e) { return null; } })();
+const IS_SEA = !!(sea && sea.isSea());
+const DATA = IS_SEA
+  ? path.join(process.env.LOCALAPPDATA || process.env.TEMP || 'C:\\Windows\\Temp', 'CampusAutoAuth')
+  : '';
+const WORK = IS_SEA
+  ? path.join(process.env.TEMP || 'C:\\Windows\\Temp', 'xcu_sea')
+  : '';
 
 const PORT = 8733;
 const ROOT = path.join(__dirname, '..');
-const SCRIPT = path.join(ROOT, 'connect_xcu.ps1');
-const CFG = path.join(ROOT, 'enabled.cfg');
-const CRED = path.join(ROOT, 'creds.json');
+const SCRIPT = IS_SEA ? path.join(WORK, 'connect_xcu.ps1') : path.join(ROOT, 'connect_xcu.ps1');
+const CFG = IS_SEA ? path.join(DATA, 'enabled.cfg') : path.join(ROOT, 'enabled.cfg');
+const CRED = IS_SEA ? path.join(DATA, 'creds.json') : path.join(ROOT, 'creds.json');
 const LOGF = path.join(process.env.TEMP || 'C:\\Windows\\Temp', 'xcu_connect.log');
-const HTML = path.join(__dirname, 'index.html');
+const HTML = IS_SEA ? null : path.join(__dirname, 'index.html');
 
 function sendJSON(res, obj, code) {
   code = code || 200;
@@ -66,6 +79,21 @@ function readBody(req, cb) {
   });
 }
 
+// SEA 模式初始化：内嵌资产落到临时工作目录（ps1 以 $PSScriptRoot=WORK 找配套文件），
+// 凭据与开关放 %LOCALAPPDATA%\CampusAutoAuth\，exe 本体可放任意目录、保持绿色单文件。
+if (IS_SEA) {
+  try {
+    fs.mkdirSync(DATA, { recursive: true });
+    fs.mkdirSync(WORK, { recursive: true });
+    fs.writeFileSync(SCRIPT, sea.getAsset('connect_xcu.ps1', 'utf8'), 'utf8');
+    if (!fs.existsSync(CFG)) {
+      fs.writeFileSync(CFG, sea.getAsset('enabled.cfg', 'utf8'), 'utf8');
+    }
+  } catch (e) {
+    console.error('SEA init failed:', e && e.message);
+  }
+}
+
 // 首次运行时生成空的 creds.json 模板，账号密码由用户在 GUI「配置」页填写
 if (!fs.existsSync(CRED)) {
   try { writeCred('', '', ''); } catch (e) {}
@@ -80,6 +108,11 @@ const server = http.createServer(function (req, res) {
   const url = req.url.split('?')[0];
 
   if (url === '/' || url === '/index.html') {
+    if (IS_SEA) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(sea.getAsset('index.html', 'utf8'));
+      return;
+    }
     fs.readFile(HTML, function (err, data) {
       if (err) { res.writeHead(500); res.end('UI missing'); return; }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -138,6 +171,15 @@ const server = http.createServer(function (req, res) {
 
   if (url === '/api/connect' && req.method === 'POST') {
     const c = readCred();
+    // SEA 模式：连接前把最新凭据与开关同步到 ps1 工作目录
+    if (IS_SEA) {
+      try {
+        fs.writeFileSync(path.join(WORK, 'creds.json'), JSON.stringify(c, null, 2), 'utf8');
+      } catch (e) {}
+      try {
+        fs.writeFileSync(path.join(WORK, 'enabled.cfg'), fs.readFileSync(CFG, 'utf8'), 'utf8');
+      } catch (e) {}
+    }
     const args = ['-ExecutionPolicy', 'Bypass', '-File', SCRIPT, '-Force'];
     if (c.portal) { args.push('-Portal', c.portal); }
     const r = spawnSync(
@@ -215,3 +257,34 @@ setInterval(function () {
     process.exit(0);
   }
 }, 3000);
+
+// SEA 模式（双击 exe）：自动打开 GUI 窗口并隐藏控制台，实现「双击即用」
+if (IS_SEA) {
+  (function openGui() {
+    const cands = [
+      (process.env['ProgramFiles(x86)'] || '') + '\\Microsoft\\Edge\\Application\\msedge.exe',
+      (process.env.LOCALAPPDATA || '') + '\\Microsoft\\Edge\\Application\\msedge.exe',
+      (process.env['ProgramFiles'] || '') + '\\Google\\Chrome\\Application\\chrome.exe'
+    ];
+    const exe = cands.find(function (c) { return c && fs.existsSync(c); });
+    if (exe) {
+      spawn(exe, ['--app=http://127.0.0.1:' + PORT], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      spawn('cmd', ['/c', 'start', '', 'http://127.0.0.1:' + PORT],
+        { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+    }
+  })();
+
+  // 隐藏控制台窗口（SW_HIDE=0），进程继续在后台运行；关窗后心跳机制自动退出
+  (function hideConsole() {
+    try {
+      var hide = path.join(WORK, 'hide_console.ps1');
+      fs.writeFileSync(hide,
+        "Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"Kernel32.dll\")] public static extern IntPtr GetConsoleWindow(); [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int n);'\n" +
+        '[C.W]::ShowWindow([C.W]::GetConsoleWindow(), 0) | Out-Null\n', 'utf8');
+      spawn('powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', hide],
+        { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    } catch (e) {}
+  })();
+}

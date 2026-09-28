@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" width="120" alt="CampusAutoAuth 图标">
+</p>
+
 # CampusAutoAuth（校园网自动认证）
 
 XCU 校园网「连 Wi-Fi + 网页认证」全自动工具，带本地 GUI 控制面板。

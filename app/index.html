@@ -449,7 +449,7 @@ $('checkUpd').onclick = async function () {
           const r2 = await fetch('/api/update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: j.url })
+            body: JSON.stringify({ url: j.url, digest: j.digest })
           });
           const j2 = await r2.json();
           if (j2.ok) {

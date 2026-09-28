@@ -1,5 +1,6 @@
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
@@ -131,6 +132,32 @@ function downloadTo(url, dest, cb, depth) {
   });
   req.on('error', function (e) { f.close(); cb(e); });
   req.on('timeout', function () { req.destroy(new Error('下载超时')); });
+}
+
+// 多源下载：直连失败（国内网络常见）时自动换镜像加速重试，下载后做 SHA-256 校验
+const GH_PROXY = 'https://gh-proxy.com/';
+function downloadWithFallback(url, digest, dest, cb) {
+  const tries = [url];
+  if (url.indexOf('https://github.com/') === 0) { tries.push(GH_PROXY + url); }
+  const tryNext = function (i) {
+    if (i >= tries.length) { cb(new Error('所有下载源均失败')); return; }
+    downloadTo(tries[i], dest, function (err) {
+      if (err) { console.log('下载源失败(' + (i + 1) + '/' + tries.length + '):', err.message); tryNext(i + 1); return; }
+      // SHA-256 校验：下载内容必须与 GitHub 官方 digest 一致（防镜像篡改/损坏）
+      if (!digest) { cb(null, tries[i]); return; }
+      const expect = String(digest).replace(/^sha256:/, '').toLowerCase();
+      const hash = crypto.createHash('sha256');
+      const s = fs.createReadStream(dest);
+      s.on('data', function (c) { hash.update(c); });
+      s.on('end', function () {
+        const actual = hash.digest('hex');
+        if (actual !== expect) { cb(new Error('校验失败：文件与官方发布不一致')); return; }
+        cb(null, tries[i]);
+      });
+      s.on('error', function (e) { cb(e); });
+    });
+  };
+  tryNext(0);
 }
 
 // SEA 模式初始化：内嵌资产落到临时工作目录（ps1 以 $PSScriptRoot=WORK 找配套文件），
@@ -270,7 +297,8 @@ const server = http.createServer(function (req, res) {
         latest: rel.tag_name,
         hasUpdate: cmpVer(rel.tag_name, VERSION) > 0,
         notes: String(rel.body || '').slice(0, 500),
-        url: exe ? exe.browser_download_url : ''
+        url: exe ? exe.browser_download_url : '',
+        digest: exe ? (exe.digest || '') : ''
       });
     });
     return;
@@ -288,7 +316,7 @@ const server = http.createServer(function (req, res) {
         return;
       }
       const newExe = path.join(DATA, 'update.exe.new');
-      downloadTo(dl, newExe, function (err) {
+      downloadWithFallback(dl, String(body.digest || ''), newExe, function (err) {
         if (err) { sendJSON(res, { ok: false, error: '下载失败：' + err.message }, 502); return; }
         try {
           // ps1 用带 BOM 的 UTF-8 写入，保证中文路径/用户名下 PowerShell 也能正确解析

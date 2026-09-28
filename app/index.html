@@ -237,6 +237,15 @@ h1{font-size:19px;margin:0;letter-spacing:.2px;font-weight:600}
           <div class="switch" id="swExit"><div class="knob"></div></div>
         </div>
       </div>
+      <div class="card" style="margin-top:14px">
+        <div class="row">
+          <div>
+            <div style="font-size:15px;font-weight:600">软件版本 <span class="label" id="verNow"></span></div>
+            <div class="label" id="updMsg" style="margin-top:4px">在线检查并升级到最新版</div>
+          </div>
+          <button class="btn2" id="checkUpd" style="margin:0;padding:8px 14px;font-size:13px">检查更新</button>
+        </div>
+      </div>
     </div>
     </div>
   </div>
@@ -277,6 +286,7 @@ async function status() {
       $('eyeCur').style.display = 'none';
     }
     $('curPortal').textContent = j.portal || '自动探测';
+    $('verNow').textContent = j.version ? 'v' + j.version : '';
   } catch (e) {
     $('net').textContent = '服务未响应';
   }
@@ -373,8 +383,7 @@ $('save').onclick = async function () {
   b.textContent = '保存配置';
 };
 
-$('connect').onclick = async function () {
-  const b = $('connect');
+$('connect').onclick = async function () {  const b = $('connect');
   b.disabled = true;
   b.textContent = '连接中…';
   $('msg').textContent = '';
@@ -411,12 +420,69 @@ loadLog();
 setInterval(status, 10000);
 setInterval(loadLog, 15000);
 
+// —— 检查更新 ——
+// updating=true 后跳过心跳与关窗通知：更新过程中旧页面若把 bye 发给已重启的新服务，会误杀新进程
+let updating = false;
+$('checkUpd').onclick = async function () {
+  const b = $('checkUpd');
+  if (b.disabled) return;
+  b.disabled = true;
+  b.textContent = '检查中…';
+  $('updMsg').textContent = '正在检查更新…';
+  try {
+    const r = await fetch('/api/check_update');
+    const j = await r.json();
+    if (!j.ok) {
+      $('updMsg').textContent = '检查失败：' + (j.error || '网络异常');
+    } else if (!j.hasUpdate) {
+      $('updMsg').textContent = '已是最新版本 v' + j.current;
+    } else {
+      const note = (j.notes || '').split('\n').filter(function (x) { return x.trim(); })[0] || '';
+      $('updMsg').textContent = '发现新版本 v' + j.latest + (note ? '：' + note.slice(0, 40) : '');
+      b.textContent = '一键更新';
+      b.disabled = false;
+      b.onclick = async function () {
+        b.disabled = true;
+        updating = true;
+        $('updMsg').textContent = '正在下载更新，完成后应用将自动重启…';
+        try {
+          const r2 = await fetch('/api/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: j.url })
+          });
+          const j2 = await r2.json();
+          if (j2.ok) {
+            $('updMsg').textContent = '下载完成，应用即将自动重启并打开新窗口…';
+          } else {
+            updating = false;
+            $('updMsg').textContent = '更新失败：' + (j2.error || '未知错误');
+            b.textContent = '重试更新';
+            b.disabled = false;
+          }
+        } catch (e) {
+          updating = false;
+          $('updMsg').textContent = '更新失败：网络异常';
+          b.textContent = '重试更新';
+          b.disabled = false;
+        }
+      };
+      return;
+    }
+  } catch (e) {
+    $('updMsg').textContent = '检查失败：网络异常';
+  }
+  b.disabled = false;
+  b.textContent = '检查更新';
+};
+
 // 心跳：窗口存活时持续上报，server 据此在窗口关闭后自动退出，避免残留后台 node 进程
-async function beat() { try { await fetch('/api/heartbeat'); } catch (e) {} }
+async function beat() { if (updating) return; try { await fetch('/api/heartbeat'); } catch (e) {} }
 beat();
 setInterval(beat, 4000);
 // 关窗时主动通知 server 立即退出（sendBeacon 在卸载阶段仍可异步发送）
 window.addEventListener('beforeunload', function () {
+  if (updating) return;
   try { navigator.sendBeacon('/api/bye'); } catch (e) {}
 });
 </script>

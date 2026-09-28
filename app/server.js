@@ -1,7 +1,12 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+
+// 应用版本：发新版时同步更新此处，检查更新以此与 GitHub latest Release 比较
+const VERSION = '1.0.1';
+const GITHUB_REPO = 'weiyi251/CampusAutoAuth';
 
 // SEA（Single Executable Application）单文件模式：
 // exe 由 node + postject 注入生成，index.html / connect_xcu.ps1 / enabled.cfg 作为资产内嵌；
@@ -79,6 +84,55 @@ function readBody(req, cb) {
   });
 }
 
+// —— 检查更新 ——
+// 语义化版本比较：a 大于 b 返回正数
+function cmpVer(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.');
+  const pb = String(b).replace(/^v/, '').split('.');
+  for (let i = 0; i < 3; i++) {
+    const d = (parseInt(pa[i], 10) || 0) - (parseInt(pb[i], 10) || 0);
+    if (d) { return d; }
+  }
+  return 0;
+}
+
+function fetchJson(url, timeout, cb) {
+  const req = https.get(url, {
+    headers: { 'User-Agent': 'CampusAutoAuth', Accept: 'application/vnd.github+json' },
+    timeout: timeout || 10000
+  }, function (res) {
+    if (res.statusCode !== 200) { res.resume(); cb(new Error('HTTP ' + res.statusCode)); return; }
+    let d = '';
+    res.on('data', function (c) { d += c; });
+    res.on('end', function () {
+      try { cb(null, JSON.parse(d)); } catch (e) { cb(e); }
+    });
+  });
+  req.on('error', function (e) { cb(e); });
+  req.on('timeout', function () { req.destroy(new Error('请求超时')); });
+}
+
+function downloadTo(url, dest, cb, depth) {
+  depth = depth || 0;
+  if (depth > 4) { cb(new Error('重定向次数过多')); return; }
+  const mod = url.indexOf('https://') === 0 ? https : http;
+  const f = fs.createWriteStream(dest);
+  const req = mod.get(url, { headers: { 'User-Agent': 'CampusAutoAuth' }, timeout: 300000 }, function (res) {
+    // GitHub 下载链接会 302 到 release-assets CDN，需跟随重定向
+    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+      res.resume();
+      f.close();
+      downloadTo(res.headers.location, dest, cb, depth + 1);
+      return;
+    }
+    if (res.statusCode !== 200) { res.resume(); f.close(); cb(new Error('HTTP ' + res.statusCode)); return; }
+    res.pipe(f);
+    f.on('finish', function () { f.close(cb); });
+  });
+  req.on('error', function (e) { f.close(); cb(e); });
+  req.on('timeout', function () { req.destroy(new Error('下载超时')); });
+}
+
 // SEA 模式初始化：内嵌资产落到临时工作目录（ps1 以 $PSScriptRoot=WORK 找配套文件），
 // 凭据与开关放 %LOCALAPPDATA%\CampusAutoAuth\，exe 本体可放任意目录、保持绿色单文件。
 if (IS_SEA) {
@@ -130,7 +184,8 @@ const server = http.createServer(function (req, res) {
         username: c.username,
         password: c.password,
         hasPassword: !!c.password,
-        portal: c.portal
+        portal: c.portal,
+        version: VERSION
       });
     });
     return;
@@ -185,7 +240,7 @@ const server = http.createServer(function (req, res) {
     const r = spawnSync(
       'powershell.exe',
       args,
-      { encoding: 'utf8', timeout: 60000 }
+      { encoding: 'utf8', timeout: 60000, windowsHide: true }
     );
     const out = ((r.stdout || '') + (r.stderr || '')).trim();
     isOnline(function (online) {
@@ -198,6 +253,64 @@ const server = http.createServer(function (req, res) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('ok');
     process.exit(0);
+    return;
+  }
+
+  // 检查更新：与 GitHub latest Release 比较版本，返回新版号/说明/exe 下载地址
+  if (url === '/api/check_update') {
+    fetchJson('https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest', 10000, function (err, rel) {
+      if (err || !rel || !rel.tag_name) {
+        sendJSON(res, { ok: false, error: err ? err.message : '未获取到版本信息' });
+        return;
+      }
+      const exe = (rel.assets || []).find(function (a) { return a.name === 'CampusAutoAuth.exe'; });
+      sendJSON(res, {
+        ok: true,
+        current: VERSION,
+        latest: rel.tag_name,
+        hasUpdate: cmpVer(rel.tag_name, VERSION) > 0,
+        notes: String(rel.body || '').slice(0, 500),
+        url: exe ? exe.browser_download_url : ''
+      });
+    });
+    return;
+  }
+
+  // 在线更新：下载新版 exe 到数据目录，生成更新脚本（等本进程退出→覆盖→重启→自删），
+  // 应答后延迟退出，由脚本完成替换。仅 exe（SEA）模式支持。
+  if (url === '/api/update' && req.method === 'POST') {
+    readBody(req, function (body) {
+      if (!IS_SEA) { sendJSON(res, { ok: false, error: '仅 exe 版支持在线更新' }, 400); return; }
+      const dl = String(body.url || '');
+      if (!/^https:\/\/github\.com\//.test(dl) && !/^https:\/\/release-assets\.githubusercontent\.com\//.test(dl)
+        && !/^http:\/\/127\.0\.0\.1[:/]/.test(dl)) {
+        sendJSON(res, { ok: false, error: '非法更新地址: ' + dl.slice(0, 120) }, 400);
+        return;
+      }
+      const newExe = path.join(DATA, 'update.exe.new');
+      downloadTo(dl, newExe, function (err) {
+        if (err) { sendJSON(res, { ok: false, error: '下载失败：' + err.message }, 502); return; }
+        try {
+          // ps1 用带 BOM 的 UTF-8 写入，保证中文路径/用户名下 PowerShell 也能正确解析
+          const ps1 = path.join(DATA, 'update.ps1');
+          fs.writeFileSync(ps1, '\ufeff'
+            + '$exe = "' + process.execPath.replace(/'/g, "''") + '"\r\n'
+            + '$new = "' + newExe.replace(/'/g, "''") + '"\r\n'
+            + 'while (Get-Process -Id ' + process.pid + ' -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\r\n'
+            + 'Start-Sleep -Milliseconds 300\r\n'
+            + 'Copy-Item -LiteralPath $new -Destination $exe -Force\r\n'
+            + 'Start-Process -FilePath $exe\r\n'
+            + 'Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue\r\n'
+            + 'Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\r\n', 'utf8');
+          spawn('powershell.exe',
+            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps1],
+            { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+        } catch (e) { sendJSON(res, { ok: false, error: '生成更新脚本失败：' + e.message }, 500); return; }
+        sendJSON(res, { ok: true });
+        console.log('更新包下载完成，即将退出并由更新脚本替换重启');
+        setTimeout(function () { process.exit(0); }, 500);
+      });
+    });
     return;
   }
 
@@ -258,7 +371,9 @@ setInterval(function () {
   }
 }, 3000);
 
-// SEA 模式（双击 exe）：自动打开 GUI 窗口并隐藏控制台，实现「双击即用」
+// SEA 模式（双击 exe）：自动打开 GUI 窗口，实现「双击即用」。
+// exe 的 PE 子系统已改为 GUI（无控制台窗口），故不再需要隐藏控制台；
+// 子进程统一 windowsHide，避免 powershell/cmd 作为控制台程序时闪窗。
 if (IS_SEA) {
   (function openGui() {
     const cands = [
@@ -268,23 +383,10 @@ if (IS_SEA) {
     ];
     const exe = cands.find(function (c) { return c && fs.existsSync(c); });
     if (exe) {
-      spawn(exe, ['--app=http://127.0.0.1:' + PORT], { detached: true, stdio: 'ignore' }).unref();
+      spawn(exe, ['--app=http://127.0.0.1:' + PORT], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     } else {
       spawn('cmd', ['/c', 'start', '', 'http://127.0.0.1:' + PORT],
-        { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+        { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true }).unref();
     }
-  })();
-
-  // 隐藏控制台窗口（SW_HIDE=0），进程继续在后台运行；关窗后心跳机制自动退出
-  (function hideConsole() {
-    try {
-      var hide = path.join(WORK, 'hide_console.ps1');
-      fs.writeFileSync(hide,
-        "Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"Kernel32.dll\")] public static extern IntPtr GetConsoleWindow(); [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int n);'\n" +
-        '[C.W]::ShowWindow([C.W]::GetConsoleWindow(), 0) | Out-Null\n', 'utf8');
-      spawn('powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', hide],
-        { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-    } catch (e) {}
   })();
 }

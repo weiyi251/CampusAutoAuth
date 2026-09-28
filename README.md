@@ -1,56 +1,70 @@
 # CampusAutoAuth（校园网自动认证）
 
 XCU 校园网「连 Wi-Fi + 网页认证」全自动工具，带本地 GUI 控制面板。
+**免安装，单个 exe 双击即用。**
 
-## 快速开始（exe 免安装版，推荐）
+## 下载
 
-1. 从 [Releases](https://github.com/weiyi251/CampusAutoAuth/releases) 下载 `CampusAutoAuth.exe`（Windows 10+，无需安装 Node）；
-2. 双击运行：自动弹出控制面板窗口（控制台窗口会自动隐藏）；
-   首次运行如遇 SmartScreen 提示，点「更多信息 → 仍要运行」；
-3. 在「配置」页填入学号、密码，点「立即连接校园网」即可。
+从 [Releases](https://github.com/weiyi251/CampusAutoAuth/releases) 下载：
 
-exe 版的数据位置：凭据与开关保存在 `%LOCALAPPDATA%\CampusAutoAuth\`（`creds.json`、`enabled.cfg`），exe 本体可放任意目录。
+| 文件 | 说明 |
+|---|---|
+| `CampusAutoAuth.exe` | **免安装版（推荐）**，Windows 10+，无需安装 Node |
+| `CampusAutoAuth-v1.0.0.zip` | 源码包，供自行运行或二次改造 |
 
-## 源码版安装
+## 使用方法（exe 版）
 
-## 目录结构
+1. 双击 `CampusAutoAuth.exe`；
+   首次运行如遇 SmartScreen 蓝色提示，点「更多信息 → 仍要运行」（exe 未做代码签名）；
+2. 自动弹出控制面板（Edge App 独立窗口，无地址栏），控制台窗口会自动隐藏；
+3. 首次使用在「配置」页填入学号、密码（如学校认证地址特殊，可一并填自定义认证网址），保存；
+4. 点「立即连接校园网」：自动连 XCU Wi-Fi → 探测认证门户 → 提交凭据 → 复查联网，全程无需手动操作；
+5. 平时挂着即可：可打开「自动连接」定时保活；**关闭面板窗口后服务自动退出**，不留任何后台进程。
+
+**数据位置**：`%LOCALAPPDATA%\CampusAutoAuth\`（`creds.json` 账号密码、`enabled.cfg` 自动连接开关）。
+exe 本体可放任意目录，凭据只保存在本机、不会上传。
+
+## 功能特性
+
+- **一键连接**：连 Wi-Fi + 网页 Portal 认证全自动
+- **定时保活**：掉线自动重连，可开关
+- **自定义认证网址**：门户地址特殊时手动指定，留空自动探测
+- **当前配置展示**：账号、密码（可显隐）、认证网址一目了然
+- **端口自愈**：启动时自动清理 8733 端口残留进程
+- **关窗即退**：心跳 + bye 双机制，关闭窗口零后台残留
+
+## 源码运行（开发者）
+
+```
+git clone https://github.com/weiyi251/CampusAutoAuth.git
+```
 
 | 路径 | 作用 |
 |---|---|
 | `connect_xcu.ps1` | 主脚本：连 XCU → 探测门户 → 提交账号密码 → 复查联网 |
 | `enabled.cfg` | 自动连接开关（`1`=开，`0`=关；文件不存在视为开） |
 | `creds.json` | 账号密码（**明文，已被 .gitignore 排除**） |
-| `creds.example.json` | 凭据模板，复制为 `creds.json` 后填自己的 |
-| `app/` | GUI 控制面板（Node 零依赖服务 + 网页 UI，端口 127.0.0.1:8733） |
-| `scripts/` | 命令行开关与立即连接（功能已被 GUI 覆盖，备用） |
-| `startup/` | 开机自启用的 bat，需复制到系统「启动」文件夹 |
-| `archive/` | 早期排查门户用的探测脚本，仅留档 |
+| `creds.example.json` | 凭据模板 |
+| `app/` | GUI 控制面板（Node 零依赖服务 + 网页 UI，端口 127.0.0.1:8733），双击 `app\XCU-Assistant.bat` 启动 |
+| `startup/` | 开机自启用的 bat，复制到系统「启动」文件夹 |
+| `sea-config.json` | SEA 单文件打包配置 |
 
-## 安装
+源码模式下凭据与开关存放在项目根目录，其余逻辑与 exe 版一致。
 
-1. **凭据**：复制 `creds.example.json` → `creds.json`，填入自己的学号和密码。
-   （推荐直接在 GUI「配置」页填写，保存后自动生成 `creds.json`。）
-   脚本内**不内置任何账号密码**：检测不到凭据时会记录日志并直接退出，不做联网动作。
-2. **开机自启**：把 `startup\XCUAutoConnect.bat` 复制到
-   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`。
-3. **GUI 启动器**：把 `app\XCU-Assistant.bat` 的快捷方式放到桌面，双击即开
-   （Edge `--app` 模式独立窗口，无地址栏）。
+## 构建 exe
 
-## 用法
+依赖 Node 22+（构建机需 npm，可用 [postject](https://github.com/nodejs/postject)）：
 
-- 开关自动连接：GUI 里的拨动开关，或跑 `scripts\enable_autoconnect.bat` / `disable_autoconnect.bat`。
-- 立即连接：GUI 点「立即连接校园网」，或跑 `scripts\connect_now.bat`（带 `-Force`，忽略开关）。
-- 账号密码 / 认证网址：GUI 设置 → 「配置」页里改，页内「当前配置」卡片显示当前账号、密码（可点"显示"查看明文）与校园网网址；保存后立即生效，密码留空表示不修改。
-
-## 路径说明
-
-脚本与服务端都用**自身所在目录**定位配置（`PSScriptRoot` / `__dirname/..`），
-整目录搬到别处也能直接跑，无需改路径。
-`startup\XCUAutoConnect.bat` 除外——它写的是安装后的绝对路径，搬动仓库后需同步修改。
+```
+node --experimental-sea-config sea-config.json
+copy <node目录>\node.exe dist\CampusAutoAuth.exe
+npx postject dist\CampusAutoAuth.exe NODE_SEA_BLOB dist\sea-prep.blob ^
+  --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+```
 
 ## 排错
 
-- 日志：`%TEMP%\xcu_connect.log`
+- 连接日志：`%TEMP%\xcu_connect.log`
 - 登录页快照：`%TEMP%\xcu_portal.html`（认证失败时自动保存，据此调整字段匹配规则）
 
 ## 安全提醒
@@ -62,4 +76,4 @@ GUI 与服务端仅监听 `127.0.0.1`，数据不出本机。
 
 - 本工具仅用于自动化登录**你自己有权使用**的校园网账号，请遵守所在学校的网络使用规定；
 - 认证门户改版可能导致脚本失效，需按快照自行调整字段匹配规则；
-- 本项目按现状（AS IS）提供，仅供学习交流，作者不对使用后果承担责任。
+- 本项目按现状（AS IS）提供，仅供学习交流，按 MIT 许可证发布，作者不对使用后果承担责任。

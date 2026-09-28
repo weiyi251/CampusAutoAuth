@@ -1,0 +1,17 @@
+# 凭据（含明文密码，禁止入库）
+creds.json
+
+# 运行时日志与登录页快照
+*.log
+archive/portal_probe.html
+
+# 依赖与临时文件
+node_modules/
+.DS_Store
+Thumbs.db
+# SEA 打包产物
+dist/
+
+# 内部交接文档与 AI 会话数据（不发布）
+HANDOFF.md
+.workbuddy/

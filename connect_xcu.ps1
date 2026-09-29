@@ -21,16 +21,22 @@ function Write-Log($msg){
 }
 Write-Log "=== XCU auto-connect start ==="
 
-if (Test-Path $credFile) {
+# 凭据来源：优先环境变量（GUI 直接传入，全程不落明文文件），其次回落同目录 creds.json
+if ($env:XCU_USER) { $username = [string]$env:XCU_USER }
+if ($env:XCU_PASS) { $password = [string]$env:XCU_PASS }
+if ($env:XCU_PORTAL) { $portalUrl = [string]$env:XCU_PORTAL }
+if ($username -or $password) { Write-Log "Credentials loaded from environment" }
+
+if (-not $username -and (Test-Path $credFile)) {
     try {
         $raw = [System.IO.File]::ReadAllText($credFile, [System.Text.Encoding]::UTF8)
         $cred = $raw | ConvertFrom-Json
         if ($cred.username) { $username = [string]$cred.username }
         if ($cred.password) { $password = [string]$cred.password }
-        if ($cred.portal) { $portalUrl = [string]$cred.portal }
+        if ($cred.portal -and -not $portalUrl) { $portalUrl = [string]$cred.portal }
         Write-Log "Credentials loaded from creds.json"
     } catch { Write-Log "Failed to read creds.json" }
-} else {
+} elseif (-not $username) {
     Write-Log "creds.json not found"
 }
 
